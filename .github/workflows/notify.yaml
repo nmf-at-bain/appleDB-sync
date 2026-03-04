@@ -1,0 +1,65 @@
+name: monitor-external-no-fork
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-external:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Local State
+        uses: actions/checkout@v4
+
+      - name: Check External Repo Commits
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXTERNAL_REPO="littlebyteorg/appledb" # Change this
+          TARGET_PATH="osFiles/iOS/"
+          
+          # 1. Get the latest SHA from the external repo
+          LATEST_SHA=$(gh api repos/$EXTERNAL_REPO/commits/main --jq '.sha')
+          
+          # 2. Read the last SHA we processed (stored in a local file)
+          # If the file doesn't exist, we'll just use the latest one and wait for next time
+          if [ ! -f last_sha.txt ]; then
+            echo $LATEST_SHA > last_sha.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add last_sha.txt
+            git commit -m "Initialize SHA tracker"
+            git push
+            echo "Initialized tracker with $LATEST_SHA. No files to process yet."
+            exit 0
+          fi
+          
+          PREVIOUS_SHA=$(cat last_sha.txt)
+
+          # 3. If they are the same, nothing has changed
+          if [ "$LATEST_SHA" == "$PREVIOUS_SHA" ]; then
+            echo "No new changes in $EXTERNAL_REPO"
+            exit 0
+          fi
+
+          # 4. Get the list of added files between the two SHAs
+          echo "Comparing $PREVIOUS_SHA to $LATEST_SHA"
+          gh api repos/$EXTERNAL_REPO/compare/$PREVIOUS_SHA...$LATEST_SHA \
+            --jq '.files[] | select(.status == "added") | .filename' | grep "^$TARGET_PATH" > new_files.txt || true
+
+          # 5. Send to Azure
+          while IFS= read -r FILE_PATH; do
+            [ -z "$FILE_PATH" ] && continue
+            echo "New file found: $FILE_PATH"
+            curl -X POST "${{ secrets.AZURE_FUNCTION_URL }}?code=${{ secrets.FUNCTION_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"filePath\": \"$FILE_PATH\"}"
+          done < new_files.txt
+
+          # 6. Update local tracker
+          echo $LATEST_SHA > last_sha.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_sha.txt
+          git commit -m "Update tracker to $LATEST_SHA"
+          git push
