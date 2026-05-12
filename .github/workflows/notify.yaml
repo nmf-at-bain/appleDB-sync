@@ -3,14 +3,12 @@ on:
   schedule:
     - cron: '*/30 * * * *'
   workflow_dispatch:
-
 jobs:
   check-external:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Local State
         uses: actions/checkout@v5
-
       - name: Check External Repo Commits
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -35,18 +33,24 @@ jobs:
           fi
           
           PREVIOUS_SHA=$(cat last_sha.txt)
-
           # 3. If they are the same, nothing has changed
           if [ "$LATEST_SHA" == "$PREVIOUS_SHA" ]; then
             echo "No new changes in $EXTERNAL_REPO"
             exit 0
           fi
-
-          # 4. Get the list of added files between the two SHAs
-          echo "Comparing $PREVIOUS_SHA to $LATEST_SHA"
-          gh api repos/$EXTERNAL_REPO/compare/$PREVIOUS_SHA...$LATEST_SHA \
-            --jq '.files[] | select(.status == "added") | .filename' | grep "^$TARGET_PATH" > new_files.txt || true
-
+          # 4. Get added files and qualifying modified files
+          COMPARE=$(gh api repos/$EXTERNAL_REPO/compare/$PREVIOUS_SHA...$LATEST_SHA)
+          
+          echo "$COMPARE" | jq -r '.files[] | select(.status == "added") | .filename' | grep "^$TARGET_PATH" > new_files.txt || true
+          
+          echo "$COMPARE" | jq -r '.files[] | select(.status == "modified") | .filename' | grep "^$TARGET_PATH" | while IFS= read -r FILE_PATH; do
+            OLD=$(gh api repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$PREVIOUS_SHA --jq '.content' | base64 -d)
+            NEW=$(gh api repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$LATEST_SHA --jq '.content' | base64 -d)
+            if [ "$(echo "$OLD" | jq 'has("createDuplicateEntries")')" == "false" ] && \
+               [ "$(echo "$NEW" | jq 'has("createDuplicateEntries")')" == "true" ]; then
+              echo "$FILE_PATH" >> new_files.txt
+            fi
+          done
           # 5. Send to Azure
           while IFS= read -r FILE_PATH; do
             [ -z "$FILE_PATH" ] && continue
@@ -55,7 +59,6 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{\"filePath\": \"$FILE_PATH\"}"
           done < new_files.txt
-
           # 6. Update local tracker
           echo $LATEST_SHA > last_sha.txt
           git config user.name "github-actions[bot]"
