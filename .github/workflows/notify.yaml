@@ -44,8 +44,8 @@ jobs:
           echo "$COMPARE" | jq -r '.files[] | select(.status == "added") | .filename' | grep "^$TARGET_PATH" > new_files.txt || true
           
           echo "$COMPARE" | jq -r '.files[] | select(.status == "modified") | .filename' | grep "^$TARGET_PATH" | while IFS= read -r FILE_PATH; do
-            OLD=$(gh api repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$PREVIOUS_SHA --jq '.content' | base64 -d)
-            NEW=$(gh api repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$LATEST_SHA --jq '.content' | base64 -d)
+            OLD=$(gh api "repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$PREVIOUS_SHA" --jq '.content' | base64 -d)
+            NEW=$(gh api "repos/$EXTERNAL_REPO/contents/$FILE_PATH?ref=$LATEST_SHA" --jq '.content' | base64 -d)
             if [ "$(echo "$OLD" | jq 'has("createDuplicateEntries")')" == "false" ] && \
                [ "$(echo "$NEW" | jq 'has("createDuplicateEntries")')" == "true" ]; then
               echo "$FILE_PATH" >> new_files.txt
